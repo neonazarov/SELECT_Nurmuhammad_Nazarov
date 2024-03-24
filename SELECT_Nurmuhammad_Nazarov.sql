@@ -1,95 +1,69 @@
-with StoreIncome as (
-select
-        store_id,
-        s.staff_id,
-        first_name,
-        last_name,
-sum(p.amount) as total_revenue
-    from staff as s
-    join payment as p on s.staff_id = p.staff_id
-    where extract(year from p.payment_date) = 2017
-    group by s.store_id, s.staff_id, s.first_name, s.last_name
-),
-RankIncome as (
-    select
-        store_id,
-        staff_id,
-        first_name,
-        last_name,
-        total_revenue,
-        row_number() over (partition by store_id order by total_revenue desc) as ranking
-    from StoreIncome
+-- 1. Highest Revenue by Staff Members for Each Store in 2017
+-- A: Subquery and GROUP BY
+
+SELECT store_id, staff_id, MAX(revenue) AS highest_revenue
+FROM (
+    SELECT store_id, staff_id, SUM(amount) AS revenue
+    FROM payment
+    JOIN rental ON rental.rental_id = payment.rental_id
+    WHERE YEAR(payment_date) = 2017
+    GROUP BY store_id, staff_id
+) AS revenue_summary
+GROUP BY store_id;
+
+-- B: JOIN with a Ranked CTE for Filtering
+
+WITH RankedRevenue AS (
+    SELECT store_id, staff_id, SUM(amount) AS revenue,
+           RANK() OVER(PARTITION BY store_id ORDER BY SUM(amount) DESC) AS rev_rank
+    FROM payment
+    JOIN rental ON rental.rental_id = payment.rental_id
+    WHERE YEAR(payment_date) = 2017
+    GROUP BY store_id, staff_id
 )
-select store_id, staff_id, first_name, last_name, total_revenue
-from RankIncome
-where ranking = 1;
+SELECT store_id, staff_id, revenue
+FROM RankedRevenue
+WHERE rev_rank = 1;
+
+---------------------------------------------------------------
+-- 2.Top Five Movies Rented More Than Others and Expected Audience Age
+-- Approach A: JOINs and GROUP BY
+
+SELECT film_id, title, COUNT(rental_id) AS rental_count, 'Expected age range' AS audience_age
+FROM rental
+JOIN inventory ON rental.inventory_id = inventory.inventory_id
+JOIN film ON inventory.film_id = film.film_id
+GROUP BY film_id
+ORDER BY rental_count DESC
+LIMIT 5;
+
+-- B: Using Film Categories
+-- This query assumes a link between films and their categories, which can influence the expected audience age
+SELECT film.title, COUNT(rental.rental_id) AS rental_count, category.name AS genre, 'Expected age range' AS audience_age
+FROM rental
+JOIN inventory ON rental.inventory_id = inventory.inventory_id
+JOIN film ON inventory.film_id = film.film_id
+JOIN film_category ON film.film_id = film_category.film_id
+JOIN category ON film_category.category_id = category.category_id
+GROUP BY film.film_id
+ORDER BY rental_count DESC
+LIMIT 5;
+
+---------------------------------------------------------
+-- 3.Actors/Actresses with Longer Periods Without Acting
+-- Approach A: Using MAX Function
+        
+SELECT actor_id, MAX(DATEDIFF(CURDATE(), film_actor.last_update)) AS days_without_acting
+FROM film_actor
+GROUP BY actor_id
+ORDER BY days_without_acting DESC;
+
+-- Approach B: Using a Date Range
+
+SELECT actor_id, DATEDIFF(CURDATE(), MAX(last_update)) AS days_since_last_movie
+FROM film_actor
+GROUP BY actor_id
+ORDER BY days_since_last_movie DESC
+LIMIT 1;
 
 
-
-with Best_Movies as (
-    select
-        f.film_id,
-        f.title as movie_title,
-        COUNT(r.rental_id) as rental_count
-    from film as f
-    join inventory as i on f.film_id = i.film_id
-    join rental as r on i.inventory_id = r.inventory_id
-    group by f.film_id
-    order by rental_count desc 
-    limit 5
-),
-Movie_Rating as (
-    select
-        f.film_id,
-        f.title as movie_title,
-        case
-            when f.rating = 'G' then '0+'
-            when f.rating = 'PG' then '7+'
-            when f.rating = 'PG-13' then '13+'
-            when f.rating = 'R' then '17+'
-            else 'Unknown'
-        end as age_category
-    from film as f
-)
-select
-    pm.movie_title,
-    pm.rental_count,
-    age_category as expected_age
-from Best_Movies as pm
-join Movie_Rating as mr on pm.film_id = mr.film_id
-
-
-
-
-
-with Actor_Last_Acted as (
-    select
-        a.actor_id,
-        a.first_name,
-        a.last_name,
-        max(f.release_year) as last_act_year
-    from
-        actor as a
-    join
-        film_actor as fa on a.actor_id = fa.actor_id
-    join
-        film as f on fa.film_id = f.film_id
-    group by 
-        a.actor_id, a.first_name, a.last_name
-)
-, Latest_Year as (
-    select 
-        max(f.release_year) as latest_year
-    from
-        film as f
-)
-select
-    actor_id,
-    CONCAT(first_name, ' ', last_name) as full_name,
-    last_act_year
-from
-    Actor_Last_Acted as ala, Latest_Year as ly
-where
-    ala.last_act_year < ly.latest_year
-order by
-    ala.last_act_year;
